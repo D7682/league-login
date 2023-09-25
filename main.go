@@ -3,23 +3,46 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/manifoldco/promptui"
-	"golang.org/x/crypto/argon2"
+	"github.com/go-vgo/robotgo"
+	"github.com/spf13/cobra"
+)
+
+// Constants for file names
+const (
+	credentialsFileName = "credentials.json"
+	defaultUserFileName = "default_user.txt"
+)
+
+// Constants for directory paths
+var (
+	programDirectory string // Directory where the program is located
+	dataDirectory    string // Directory where data files are stored (credentials.json and default_user.txt)
 )
 
 // Credentials represents the user's login credentials
 type Credentials struct {
 	Username string `json:"username"`
-	Password []byte `json:"password"`
+	Password string `json:"password"`
 }
 
 // Database represents the user credentials database
 type Database struct {
 	Users []Credentials `json:"users"`
+}
+
+// Initialize directory paths
+func init() {
+	ex, err := os.Executable()
+	if err != nil {
+		log.Fatal(err)
+	}
+	programDirectory = filepath.Dir(ex)
+	dataDirectory = programDirectory
 }
 
 // DeleteFile deletes the file at the specified path
@@ -111,144 +134,154 @@ func writeDatabase(db Database, filePath string) error {
 	return nil
 }
 
+// saveDefaultUser saves the default user to a file in the data directory
+func saveDefaultUser(username string) error {
+	defaultUserFilePath := filepath.Join(dataDirectory, defaultUserFileName)
+	err := os.WriteFile(defaultUserFilePath, []byte(username), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to save default user: %v", err)
+	}
+	return nil
+}
+
+// getDefaultUser reads the default user from the default user file in the data directory
+func getDefaultUser() (string, error) {
+	defaultUserFilePath := filepath.Join(dataDirectory, defaultUserFileName)
+	data, err := os.ReadFile(defaultUserFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read default user: %v", err)
+	}
+	return string(data), nil
+}
+
+func waitForWindow(title string, timeout time.Duration) bool {
+	found := make(chan bool)
+
+	go func() {
+		for {
+			hwnd := robotgo.FindWindow(title)
+			if hwnd != 0 { // Check if the window handle is not 0
+				found <- true
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-found:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func main() {
+	var rootCmd = &cobra.Command{Use: "league-login"}
+
+	credFilePath, err := getCredentialsFilePath()
+	if err != nil {
+		fmt.Printf("Failed to get credentials file path: %v\n", err)
+		return
+	}
+	// ...
+
+	rootCmd.Run = func(cmd *cobra.Command, args []string) {
+		defaultUser, err := getDefaultUser()
+		if err != nil {
+			fmt.Printf("Failed to get default user: %v\n", err)
+			return
+		}
+
+		if defaultUser == "" {
+			fmt.Println("No default user set. Please use flags or 'setdefault' to set a default user.")
+			return
+		}
+
+		// Get the credentials of the default user
+		credentials, err := ReadCredentials(defaultUser, credFilePath)
+		if err != nil {
+			fmt.Printf("Failed to get credentials of the default user: %v\n", err)
+			return
+		}
+
+		// Now you have the credentials of the default user in the 'credentials' variable
+		// You can use these credentials as needed
+		fmt.Printf("Default user credentials: %+v\n", credentials)
+
+		// Add your logic here to use the credentials
+		robotgo.KeyTap("cmd")
+		time.Sleep(time.Millisecond * 1500)
+		robotgo.TypeStr("League of Legends")
+		time.Sleep(time.Millisecond * 500)
+		robotgo.KeyTap("enter")
+
+		if waitForWindow("Riot Client Main", 60*time.Second) {
+			fmt.Println("Riot Client Main window found!")
+			// Add your code to interact with the window here
+		} else {
+			fmt.Println("Timeout: Riot Client Main window not found")
+		}
+
+		robotgo.TypeStr(credentials.Username)
+		robotgo.KeyTap("tab")
+		robotgo.TypeStr(credentials.Password)
+		robotgo.KeyTap("enter")
+	}
+
+	var newCmd = &cobra.Command{
+		Use:   "new",
+		Short: "Create a new user",
+		Run: func(cmd *cobra.Command, args []string) {
+			username, _ := cmd.Flags().GetString("username")
+			password, _ := cmd.Flags().GetString("password")
+
+			credentials := Credentials{
+				Username: username,
+				Password: password,
+			}
+
+			err = SaveCredentials(credentials, credFilePath)
+			if err != nil {
+				fmt.Printf("Failed to save credentials: %v\n", err)
+				return
+			}
+
+			fmt.Println("User created successfully!")
+		},
+	}
+
+	var setDefaultCmd = &cobra.Command{
+		Use:   "setdefault",
+		Short: "Set a user as default",
+		Run: func(cmd *cobra.Command, args []string) {
+			username := args[0] // Assuming the username is provided as an argument
+			err := saveDefaultUser(username)
+			if err != nil {
+				fmt.Printf("Failed to set default user: %v\n", err)
+				return
+			}
+			fmt.Printf("Default user set to: %s\n", username)
+		},
+	}
+
+	// Add flags to the "new" command
+	newCmd.Flags().StringP("username", "u", "", "Username")
+	newCmd.Flags().StringP("password", "p", "", "Password")
+
+	// Add commands to the root command
+	rootCmd.AddCommand(newCmd, setDefaultCmd)
+
+	rootCmd.Execute()
+}
+
+// getCredentialsFilePath returns the path to the credentials file
 func getCredentialsFilePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user's home directory: %v", err)
 	}
 
-	filePath := filepath.Join(homeDir, "credentials.json")
+	filePath := filepath.Join(homeDir, credentialsFileName)
 	return filePath, nil
-}
-
-func main() {
-	prompt := promptui.Select{
-		Label: "Select action",
-		Items: []string{"Create New User", "Login as Existing User"},
-	}
-
-	_, result, _ := prompt.Run()
-
-	filePath, err := getCredentialsFilePath()
-	if err != nil {
-		fmt.Printf("Failed to get credentials file path: %v\n", err)
-		return
-	}
-
-	// Check if the credentials file exists
-	_, err = os.Stat(filePath)
-	if os.IsNotExist(err) {
-		// Create an empty database if the file doesn't exist
-		db := Database{Users: []Credentials{}}
-		err = writeDatabase(db, filePath)
-		if err != nil {
-			fmt.Printf("Failed to create credentials file: %v\n", err)
-			return
-		}
-	}
-
-	switch result {
-	case "Create New User":
-		usernamePrompt := promptui.Prompt{
-			Label: "Enter username",
-		}
-		username, err := usernamePrompt.Run()
-		if err != nil {
-			fmt.Printf("Failed to read username: %v\n", err)
-			return
-		}
-
-		passwordPrompt := promptui.Prompt{
-			Label: "Enter password",
-			Mask:  '*',
-		}
-		password, err := passwordPrompt.Run()
-		if err != nil {
-			fmt.Printf("Failed to read password: %v\n", err)
-			return
-		}
-
-		credentials := Credentials{
-			Username: username,
-			Password: []byte(password),
-		}
-
-		err = SaveCredentials(credentials, filePath)
-		if err != nil {
-			fmt.Printf("Failed to save credentials: %v\n", err)
-			return
-		}
-
-		fmt.Println("User created successfully!")
-
-	case "Login as Existing User":
-		// Check if the credentials file exists
-		_, err := os.Stat(filePath)
-		if os.IsNotExist(err) {
-			fmt.Println("No existing user found. Please create a new user.")
-			return
-		}
-
-		// File exists, check if it's older than 30 days
-		fileInfo, err := os.Stat(filePath)
-		if err != nil {
-			fmt.Printf("Failed to get file info: %v\n", err)
-			return
-		}
-
-		expirationDate := fileInfo.ModTime().Add(30 * 24 * time.Hour)
-		if time.Now().After(expirationDate) {
-			err := DeleteFile(filePath)
-			if err != nil {
-				fmt.Printf("Failed to delete credentials file: %v\n", err)
-				return
-			}
-
-			fmt.Println("Credentials expired! Please log in again.")
-		} else {
-			usernamePrompt := promptui.Prompt{
-				Label: "Enter username",
-			}
-			username, err := usernamePrompt.Run()
-			if err != nil {
-				fmt.Printf("Failed to read username: %v\n", err)
-				return
-			}
-
-			credentials, err := ReadCredentials(username, filePath)
-			if err != nil {
-				fmt.Printf("Failed to read credentials: %v\n", err)
-				return
-			}
-
-			passwordPrompt := promptui.Prompt{
-				Label: "Enter password",
-				Mask:  '*',
-			}
-			password, err := passwordPrompt.Run()
-			if err != nil {
-				fmt.Printf("Failed to read password: %v\n", err)
-				return
-			}
-
-			// Hash the entered password using Argon2
-			hashedPassword := argon2.IDKey([]byte(password), []byte("somesalt"), 1, 64*1024, 4, 32)
-
-			// Compare the hashed passwords
-			if len(credentials.Password) != len(hashedPassword) {
-				fmt.Println("Invalid password!")
-				return
-			}
-			for i := range credentials.Password {
-				if credentials.Password[i] != hashedPassword[i] {
-					fmt.Println("Invalid password!")
-					return
-				}
-			}
-
-			// Passwords match, proceed with login
-			fmt.Println("Login successful!")
-			// TODO: Add your League of Legends logic here
-		}
-	}
 }
