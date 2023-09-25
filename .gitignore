@@ -1,0 +1,5 @@
+.history
+*.exe
+/tmp
+.air.toml
+default_user.txt

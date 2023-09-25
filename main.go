@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -210,9 +211,20 @@ func main() {
 		fmt.Printf("Default user credentials: %+v\n", credentials)
 
 		// Add your logic here to use the credentials
-		robotgo.KeyTap("cmd")
-		time.Sleep(time.Millisecond * 1500)
-		robotgo.TypeStr("League of Legends")
+		// Replace with the actual path to your League of Legends executable
+		// For example, on Windows, it might be something like:
+		// "C:\\Riot Games\\League of Legends\\LeagueClient.exe"
+		// On macOS, it could be:
+		// "/Applications/League of Legends.app/Contents/LoL/LeagueClient.app/Contents/MacOS/LeagueClient"
+		leagueClientPath := "C:\\Riot Games\\Riot Client\\RiotClientServices.exe"
+
+		c := exec.Command(leagueClientPath, "--launch-product=league_of_legends", "--launch-patchline=live")
+		err = c.Start()
+		if err != nil {
+			fmt.Printf("Failed to start League of Legends client: %v\n", err)
+			return
+		}
+
 		time.Sleep(time.Millisecond * 500)
 		robotgo.KeyTap("enter")
 
